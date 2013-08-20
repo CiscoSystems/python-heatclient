@@ -16,9 +16,6 @@
 import urllib
 
 from heatclient.common import base
-import heatclient.exc as exc
-
-DEFAULT_PAGE_SIZE = 20
 
 
 class Stack(base.Resource):
@@ -29,10 +26,29 @@ class Stack(base.Resource):
         self.manager.update(self, **fields)
 
     def delete(self):
-        return self.manager.delete(self)
+        return self.manager.delete(self.id)
 
-    def data(self, **kwargs):
-        return self.manager.data(self, **kwargs)
+    def get(self):
+        # set_loaded() first ... so if we have to bail, we know we tried.
+        self.set_loaded(True)
+        if not hasattr(self.manager, 'get'):
+            return
+
+        new = self.manager.get('%s/%s' % (self.stack_name, self.id))
+        if new:
+            self._add_details(new._info)
+
+    @property
+    def action(self):
+        s = self.stack_status
+        # Return everything before the first underscore
+        return s[:s.index('_')]
+
+    @property
+    def status(self):
+        s = self.stack_status
+        # Return everything after the first underscore
+        return s[s.index('_') + 1:]
 
 
 class StackManager(base.Manager):
@@ -65,10 +81,12 @@ class StackManager(base.Manager):
             if (page_size and len(stacks) == page_size and
                     (absolute_limit is None or 0 < seen < absolute_limit)):
                 qp['marker'] = stack.id
-                for image in paginate(qp, seen):
-                    yield image
+                for stack in paginate(qp, seen):
+                    yield stack
 
-        params = {'limit': kwargs.get('page_size', DEFAULT_PAGE_SIZE)}
+        params = {}
+        if 'page_size' in kwargs:
+            params['limit'] = kwargs['page_size']
 
         if 'marker' in kwargs:
             params['marker'] = kwargs['marker']
@@ -82,15 +100,17 @@ class StackManager(base.Manager):
         return paginate(params)
 
     def create(self, **kwargs):
-        """Create a stack"""
-        resp, body = self.api.json_request(
-                'POST', '/stacks', body=kwargs)
+        """Create a stack."""
+        headers = self.api.credentials_headers()
+        resp, body = self.api.json_request('POST', '/stacks',
+                                           body=kwargs, headers=headers)
 
     def update(self, **kwargs):
-        """Update a stack"""
+        """Update a stack."""
         stack_id = kwargs.pop('stack_id')
-        resp, body = self.api.json_request(
-                'PUT', '/stacks/%s' % stack_id, body=kwargs)
+        headers = self.api.credentials_headers()
+        resp, body = self.api.json_request('PUT', '/stacks/%s' % stack_id,
+                                           body=kwargs, headers=headers)
 
     def delete(self, stack_id):
         """Delete a stack."""
@@ -115,9 +135,8 @@ class StackManager(base.Manager):
         return body
 
     def validate(self, **kwargs):
-        """Validate a stack template"""
-        resp, body = self.api.json_request(
-                'POST', '/validate', body=kwargs)
+        """Validate a stack template."""
+        resp, body = self.api.json_request('POST', '/validate', body=kwargs)
         return body
 
 
@@ -129,6 +148,6 @@ class StackChildManager(base.Manager):
         if stack_id.find('/') > 0:
             return stack_id
         resp, body = self.api.json_request('GET',
-                '/stacks/%s' % stack_id)
+                                           '/stacks/%s' % stack_id)
         stack = body['stack']
         return '%s/%s' % (stack['stack_name'], stack['id'])
